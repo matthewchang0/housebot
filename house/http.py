@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -12,6 +12,7 @@ class HttpClient:
     user_agent: str
     timeout: float = 20.0
     retries: int = 3
+    _client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._client = httpx.Client(

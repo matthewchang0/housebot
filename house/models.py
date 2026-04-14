@@ -68,6 +68,19 @@ class PlannedOrder:
 
 
 @dataclass(slots=True)
+class BrokerFill:
+    activity_id: str
+    order_id: str
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    transaction_time: datetime
+    activity_type: str
+    fill_type: str
+
+
+@dataclass(slots=True)
 class MarketQuote:
     symbol: str
     bid_price: float

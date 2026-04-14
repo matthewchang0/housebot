@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from .models import Filing, PlannedOrder
+from .models import BrokerFill, Filing, PlannedOrder
 
 
 SCHEMA = """
@@ -70,6 +70,20 @@ CREATE TABLE IF NOT EXISTS runtime_state (
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS broker_fills (
+    activity_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    client_order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    qty REAL NOT NULL,
+    price REAL NOT NULL,
+    transaction_time TIMESTAMP NOT NULL,
+    activity_type TEXT NOT NULL,
+    fill_type TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -126,18 +140,25 @@ class Database:
                 inserted += cursor.rowcount
         return inserted
 
-    def list_active_filings(self, as_of: date, lookback_days: int) -> list[sqlite3.Row]:
-        return self._conn.execute(
-            """
+    def list_active_filings(
+        self,
+        as_of: date,
+        lookback_days: int,
+        min_filing_date: date | None = None,
+    ) -> list[sqlite3.Row]:
+        query = """
             SELECT *
             FROM filings
             WHERE status IN ('ACTIVE', 'NEW')
               AND date(filing_date) >= date(?, ?)
               AND direction IN ('PURCHASE', 'SALE')
-            ORDER BY filing_date DESC
-            """,
-            (as_of.isoformat(), f"-{lookback_days} days"),
-        ).fetchall()
+        """
+        params: list[Any] = [as_of.isoformat(), f"-{lookback_days} days"]
+        if min_filing_date is not None:
+            query += " AND date(filing_date) >= date(?)"
+            params.append(min_filing_date.isoformat())
+        query += " ORDER BY filing_date DESC, id DESC"
+        return self._conn.execute(query, params).fetchall()
 
     def list_flagged_filings(self, on_date: date | None = None) -> list[sqlite3.Row]:
         if on_date:
@@ -230,11 +251,184 @@ class Database:
                 (status, alpaca_order_id, filled_at, client_order_id),
             )
 
-    def recent_orders(self, on_date: date) -> list[sqlite3.Row]:
-        return self._conn.execute(
-            "SELECT * FROM orders WHERE date(created_at) = date(?) ORDER BY created_at DESC",
-            (on_date.isoformat(),),
+    def order_map_by_alpaca_id(self) -> dict[str, sqlite3.Row]:
+        rows = self._conn.execute(
+            "SELECT * FROM orders WHERE alpaca_order_id IS NOT NULL AND alpaca_order_id != ''"
         ).fetchall()
+        return {str(row["alpaca_order_id"]): row for row in rows}
+
+    def earliest_order_date(self) -> date | None:
+        row = self._conn.execute(
+            "SELECT MIN(date(rebalance_date)) AS earliest_order_date FROM orders"
+        ).fetchone()
+        if row and row["earliest_order_date"]:
+            return date.fromisoformat(str(row["earliest_order_date"]))
+        return None
+
+    def insert_broker_fills(
+        self,
+        fills: list[BrokerFill],
+        client_order_lookup: dict[str, str],
+    ) -> int:
+        inserted = 0
+        with self.transaction() as conn:
+            for fill in fills:
+                client_order_id = client_order_lookup.get(fill.order_id)
+                if not client_order_id:
+                    continue
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO broker_fills (
+                        activity_id, order_id, client_order_id, symbol, side, qty, price,
+                        transaction_time, activity_type, fill_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        fill.activity_id,
+                        fill.order_id,
+                        client_order_id,
+                        fill.symbol,
+                        fill.side,
+                        fill.qty,
+                        fill.price,
+                        fill.transaction_time.isoformat(),
+                        fill.activity_type,
+                        fill.fill_type,
+                    ),
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def list_broker_fills(
+        self,
+        symbol: str | None = None,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        query = "SELECT * FROM broker_fills"
+        params: list[Any] = []
+        if symbol is not None:
+            query += " WHERE symbol = ?"
+            params.append(symbol)
+        query += " ORDER BY transaction_time ASC, activity_id ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return self._conn.execute(query, params).fetchall()
+
+    def latest_fill_time(self) -> datetime | None:
+        row = self._conn.execute(
+            "SELECT MAX(transaction_time) AS latest_fill_time FROM broker_fills"
+        ).fetchone()
+        if row and row["latest_fill_time"]:
+            return datetime.fromisoformat(str(row["latest_fill_time"]))
+        return None
+
+    def recent_orders(self, on_date: date) -> list[sqlite3.Row]:
+        return self.list_orders(on_date=on_date)
+
+    def list_orders(
+        self,
+        on_date: date | None = None,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        query = "SELECT * FROM orders"
+        params: list[Any] = []
+        if on_date is not None:
+            query += " WHERE date(created_at) = date(?)"
+            params.append(on_date.isoformat())
+        query += " ORDER BY created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return self._conn.execute(query, params).fetchall()
+
+    def recent_snapshots(self, limit: int = 30) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT *
+            FROM portfolio_snapshots
+            ORDER BY snapshot_date DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def runtime_state_map(self, keys: tuple[str, ...] | None = None) -> dict[str, str | None]:
+        if keys is not None:
+            return {key: self.get_runtime_state(key) for key in keys}
+
+        rows = self._conn.execute(
+            "SELECT key, value FROM runtime_state ORDER BY key ASC"
+        ).fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
+
+    def latest_order(self) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM orders ORDER BY created_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+
+    def max_filing_id(self) -> int:
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS max_id FROM filings"
+        ).fetchone()
+        return int(row["max_id"]) if row else 0
+
+    def filings_after_id(
+        self,
+        after_id: int,
+        min_filing_date: date | None = None,
+    ) -> list[sqlite3.Row]:
+        query = "SELECT * FROM filings WHERE id > ?"
+        params: list[Any] = [after_id]
+        if min_filing_date is not None:
+            query += " AND date(filing_date) >= date(?)"
+            params.append(min_filing_date.isoformat())
+        query += " ORDER BY id ASC"
+        return self._conn.execute(query, params).fetchall()
+
+    def order_counts_by_status(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM orders
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """
+        ).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def recent_filings(self, limit: int = 20) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT *
+            FROM filings
+            ORDER BY filing_date DESC, created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def filing_counts_by_status(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM filings
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """
+        ).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def risk_event_counts(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            """
+            SELECT event_type, COUNT(*) AS count
+            FROM risk_events
+            GROUP BY event_type
+            ORDER BY count DESC, event_type ASC
+            """
+        ).fetchall()
+        return {str(row["event_type"]): int(row["count"]) for row in rows}
 
     def get_order(self, client_order_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
@@ -250,15 +444,31 @@ class Database:
             )
 
     def recent_risk_events(self, on_date: date) -> list[sqlite3.Row]:
-        return self._conn.execute(
-            "SELECT * FROM risk_events WHERE date(created_at) = date(?) ORDER BY created_at DESC",
-            (on_date.isoformat(),),
-        ).fetchall()
+        return self.list_risk_events(on_date=on_date)
 
-    def latest_filing_date(self) -> date | None:
-        row = self._conn.execute(
-            "SELECT MAX(date(filing_date)) AS latest_filing_date FROM filings WHERE status IN ('ACTIVE', 'NEW')"
-        ).fetchone()
+    def list_risk_events(
+        self,
+        on_date: date | None = None,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        query = "SELECT * FROM risk_events"
+        params: list[Any] = []
+        if on_date is not None:
+            query += " WHERE date(created_at) = date(?)"
+            params.append(on_date.isoformat())
+        query += " ORDER BY created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return self._conn.execute(query, params).fetchall()
+
+    def latest_filing_date(self, min_filing_date: date | None = None) -> date | None:
+        query = "SELECT MAX(date(filing_date)) AS latest_filing_date FROM filings WHERE status IN ('ACTIVE', 'NEW')"
+        params: list[Any] = []
+        if min_filing_date is not None:
+            query += " AND date(filing_date) >= date(?)"
+            params.append(min_filing_date.isoformat())
+        row = self._conn.execute(query, params).fetchone()
         if row and row["latest_filing_date"]:
             return date.fromisoformat(str(row["latest_filing_date"]))
         return None
@@ -282,6 +492,10 @@ class Database:
                 """,
                 (key, value),
             )
+
+    def delete_runtime_state(self, key: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM runtime_state WHERE key = ?", (key,))
 
     def close(self) -> None:
         self._conn.close()

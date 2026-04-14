@@ -7,11 +7,16 @@ from house.portfolio import construct_targets
 
 def _settings() -> Settings:
     return Settings(
+        backend_id="house",
         alpaca_api_key="",
         alpaca_secret_key="",
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_data_base_url="https://data.alpaca.markets",
         quiver_api_key="",
+        anthropic_api_key="",
+        anthropic_base_url="https://api.anthropic.com",
+        anthropic_model="claude-sonnet-4-20250514",
+        anthropic_version="2023-06-01",
         mode="PAPER",
         lookback_days=90,
         long_exposure=1.30,
@@ -28,6 +33,7 @@ def _settings() -> Settings:
         min_position_size=500.0,
         user_agent="NancyBot/0.1",
         poor_accuracy_members=(),
+        report_path=Path("/tmp/house-reports"),
     )
 
 

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from time import sleep
 from typing import Any
 
 from .config import Settings
 from .http import HttpClient
-from .models import AccountSnapshot, MarketQuote, PlannedOrder, Position
+from .models import AccountSnapshot, BrokerFill, MarketQuote, PlannedOrder, Position
 from .utils import chunked
 
 
@@ -70,12 +70,19 @@ class AlpacaClient:
             )
         return positions
 
-    def open_orders(self) -> list[dict[str, Any]]:
-        return self.http.get_json(
+    def open_orders(self, order_prefix: str | None = None) -> list[dict[str, Any]]:
+        orders = self.http.get_json(
             f"{self.trade_base}/v2/orders",
             headers=self._headers(),
             params={"status": "open"},
         )
+        if not order_prefix:
+            return orders
+        return [
+            order
+            for order in orders
+            if str(order.get("client_order_id") or "").startswith(f"{order_prefix}-")
+        ]
 
     def cancel_order(self, order_id: str) -> None:
         self.http.request("DELETE", f"{self.trade_base}/v2/orders/{order_id}", headers=self._headers())
@@ -141,3 +148,28 @@ class AlpacaClient:
         sleep(0.3)
         return response
 
+    def fill_activities(self, activity_date: date) -> list[BrokerFill]:
+        payload = self.http.get_json(
+            f"{self.trade_base}/v2/account/activities/FILL",
+            headers=self._headers(),
+            params={"date": activity_date.isoformat(), "direction": "asc"},
+        )
+        fills: list[BrokerFill] = []
+        for row in payload:
+            timestamp = str(row.get("transaction_time") or "")
+            if not timestamp:
+                continue
+            fills.append(
+                BrokerFill(
+                    activity_id=str(row["id"]),
+                    order_id=str(row["order_id"]),
+                    symbol=str(row["symbol"]),
+                    side=str(row["side"]),
+                    qty=float(row["qty"]),
+                    price=float(row["price"]),
+                    transaction_time=datetime.fromisoformat(timestamp.replace("Z", "+00:00")),
+                    activity_type=str(row.get("activity_type") or "FILL"),
+                    fill_type=str(row.get("type") or "fill"),
+                )
+            )
+        return fills

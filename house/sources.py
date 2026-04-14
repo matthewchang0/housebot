@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from .utils import normalize_symbol, normalize_whitespace, parse_amount_midpoint
 
 CLERK_BASE_URL = "https://disclosures-clerk.house.gov"
 QUIVER_URL = "https://api.quiverquant.com/beta/live/housetrading"
-CAPITOL_TRADES_URL = "https://bfrfrr0hn6.execute-api.us-east-1.amazonaws.com/prod/trades"
+CAPITOL_TRADES_URL = "https://www.capitoltrades.com/trades"
 MEMBER_DATA_URL = "https://clerk.house.gov/xml/lists/MemberData.xml"
 
 PTR_TABLE_RE = re.compile(
@@ -248,20 +249,25 @@ class CapitolTradesClient:
     def __init__(self, http: HttpClient) -> None:
         self.http = http
 
-    def fetch(self) -> list[Filing]:
-        payload = self.http.get_json(CAPITOL_TRADES_URL)
-        rows: list[Any]
-        if isinstance(payload, list):
-            rows = payload
-        elif isinstance(payload, dict):
-            rows = payload.get("data") or payload.get("results") or []
-        else:
-            rows = []
+    def fetch(self, since: date | None = None) -> list[Filing]:
         filings: list[Filing] = []
-        for row in rows:
-            filing = _normalize_aggregator_row(row, source="capitoltrades")
-            if filing:
-                filings.append(filing)
+        page = 1
+        while True:
+            url = CAPITOL_TRADES_URL if page == 1 else f"{CAPITOL_TRADES_URL}?page={page}"
+            rows = _extract_capitol_trades_rows(self.http.get_text(url))
+            if not rows:
+                break
+            page_dates: list[date] = []
+            for row in rows:
+                published = _parse_row_date(row.get("pubDate"))
+                if published is not None:
+                    page_dates.append(published)
+                filing = _normalize_aggregator_row(row, source="capitoltrades")
+                if filing:
+                    filings.append(filing)
+            if since and page_dates and min(page_dates) < since:
+                break
+            page += 1
         return filings
 
 
@@ -289,19 +295,31 @@ def _normalize_aggregator_row(row: Any, source: str) -> Filing | None:
     chamber = _safe_text(_pick(row, "chamber", "Chamber", "office", "Office")).lower()
     if chamber and "house" not in chamber and "representative" not in chamber:
         return None
-    direction = _normalize_direction(_pick(row, "transaction", "Transaction", "type", "Type"))
+    direction = _normalize_direction(_pick(row, "transaction", "Transaction", "type", "Type", "txType"))
     if direction not in {"PURCHASE", "SALE"}:
         return None
-    ticker = normalize_symbol(_safe_text(_pick(row, "ticker", "Ticker", "asset.ticker", "assetTicker")))
+    ticker = normalize_symbol(
+        _safe_text(_pick(row, "ticker", "Ticker", "asset.ticker", "assetTicker", "issuer.issuerTicker"))
+    )
     amount_range = _safe_text(
         _pick(row, "amount_range", "range", "Range", "amount", "Amount", "amounts")
     )
     midpoint = parse_amount_midpoint(amount_range)
-    filing_date = parse_us_date(_pick(row, "filing_date", "Date", "reportDate", "disclosureDate"))
-    tx_date = parse_us_date(_pick(row, "tx_date", "TransactionDate", "transactionDate"))
+    if midpoint is None:
+        amount_value = _pick(row, "value", "amountValue")
+        if isinstance(amount_value, (int, float)):
+            midpoint = float(amount_value)
+            amount_range = f"${midpoint:,.0f}"
+    filing_date = _parse_row_date(_pick(row, "filing_date", "Date", "reportDate", "disclosureDate", "pubDate"))
+    tx_date = _parse_row_date(_pick(row, "tx_date", "TransactionDate", "transactionDate", "txDate"))
     member_name = _safe_text(
         _pick(row, "member_name", "Representative", "representative", "politician.name", "member")
     )
+    if not member_name:
+        member_name = _member_name(
+            _safe_text(_pick(row, "politician.firstName")),
+            _safe_text(_pick(row, "politician.lastName")),
+        )
     relation = _safe_text(_pick(row, "relation", "owner", "Owner")) or "Self"
     asset_type = _safe_text(_pick(row, "asset_type", "asset.type", "asset", "AssetType")) or "Stock"
     if not filing_date or not member_name or not ticker or midpoint is None:
@@ -323,3 +341,36 @@ def _normalize_aggregator_row(row: Any, source: str) -> Filing | None:
         source=source,
         raw_text=_safe_text(row),
     )
+
+
+def _extract_capitol_trades_rows(html: str) -> list[dict[str, Any]]:
+    marker = r"\"data\":["
+    start = html.find(marker)
+    if start < 0:
+        return []
+    array_start = start + len(r"\"data\":")
+    depth = 0
+    array_end: int | None = None
+    for index, char in enumerate(html[array_start:], start=array_start):
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                array_end = index + 1
+                break
+    if array_end is None:
+        return []
+    raw_array = html[array_start:array_end]
+    decoded = raw_array.encode("utf-8").decode("unicode_escape")
+    payload = json.loads(decoded)
+    return [row for row in payload if isinstance(row, dict)]
+
+
+def _parse_row_date(raw: Any) -> date | None:
+    if raw is None:
+        return None
+    text = _safe_text(raw)
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    return parse_us_date(text)

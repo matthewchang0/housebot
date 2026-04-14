@@ -33,6 +33,7 @@ cp .env.example .env
 Set the required environment variables, then run one of:
 
 ```bash
+house alpaca-check
 house ingest
 house rebalance
 house daily-report
@@ -42,6 +43,7 @@ house run
 
 ## Notes
 
+- `house` automatically reads a local `.env` file from the current directory or a parent directory.
 - House is conservative by design: ambiguous filings are flagged and skipped.
 - Orders are only submitted during regular market hours.
 - `client_order_id` values are deterministic per rebalance date and symbol to keep execution idempotent.

@@ -24,6 +24,11 @@ MIDPOINT_TABLE: tuple[tuple[re.Pattern[str], float], ...] = (
     (re.compile(r"over\s+\$50,000,000", re.I), 50_000_000.0),
 )
 
+SYMBOL_ALIASES: dict[str, str] = {
+    "BRCM": "AVGO",
+    "SQ": "XYZ",
+}
+
 
 def normalize_whitespace(value: str) -> str:
     return re.sub(r"\s+", " ", value.replace("\x00", " ")).strip()
@@ -106,7 +111,12 @@ def business_days_ago(days: int, start: date | None = None) -> date:
 
 
 def normalize_symbol(symbol: str) -> str:
-    return re.sub(r"[^A-Z.]", "", symbol.upper())
+    cleaned = normalize_whitespace(symbol).upper()
+    if ":" in cleaned:
+        cleaned = cleaned.split(":", 1)[0]
+    cleaned = cleaned.replace("/", ".")
+    cleaned = re.sub(r"[^A-Z.]", "", cleaned)
+    return SYMBOL_ALIASES.get(cleaned, cleaned)
 
 
 def redistribute_with_cap(

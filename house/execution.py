@@ -60,6 +60,7 @@ def plan_orders(
     quotes: dict[str, MarketQuote],
     asset_map: dict[str, AssetInfo],
     rebalance_date: date,
+    order_prefix: str,
 ) -> list[PlannedOrder]:
     current_by_symbol = {
         position.symbol: (
@@ -82,16 +83,16 @@ def plan_orders(
         if current > 0 and target < 0:
             planned.extend(
                 [
-                    _build_order(symbol, -current, quote, asset, rebalance_date, 10, "CLOSE_LONG"),
-                    _build_order(symbol, target, quote, asset, rebalance_date, 70, "OPEN_SHORT"),
+                    _build_order(symbol, -current, quote, asset, rebalance_date, 10, "CLOSE_LONG", order_prefix),
+                    _build_order(symbol, target, quote, asset, rebalance_date, 70, "OPEN_SHORT", order_prefix),
                 ]
             )
             continue
         if current < 0 and target > 0:
             planned.extend(
                 [
-                    _build_order(symbol, abs(current), quote, asset, rebalance_date, 20, "COVER_SHORT"),
-                    _build_order(symbol, target, quote, asset, rebalance_date, 60, "OPEN_LONG"),
+                    _build_order(symbol, abs(current), quote, asset, rebalance_date, 20, "COVER_SHORT", order_prefix),
+                    _build_order(symbol, target, quote, asset, rebalance_date, 60, "OPEN_LONG", order_prefix),
                 ]
             )
             continue
@@ -120,7 +121,7 @@ def plan_orders(
             intent = "OPEN_SHORT"
             sequence = 70
         planned.append(
-            _build_order(symbol, delta, quote, asset, rebalance_date, sequence, intent)
+            _build_order(symbol, delta, quote, asset, rebalance_date, sequence, intent, order_prefix)
         )
     return [order for order in planned if order.qty > 0]
 
@@ -133,6 +134,7 @@ def _build_order(
     rebalance_date: date,
     sequence: int,
     intent: str,
+    order_prefix: str,
 ) -> PlannedOrder:
     side = "buy" if delta_notional > 0 else "sell"
     price = quote.ask_price if side == "buy" else quote.bid_price
@@ -146,7 +148,7 @@ def _build_order(
         qty=qty,
         limit_price=price,
         rationale=f"{intent} to reach rebalance target.",
-        client_order_id=f"house-{rebalance_date:%Y%m%d}-{sequence:02d}-{symbol}-{side}",
+        client_order_id=f"{order_prefix}-{rebalance_date:%Y%m%d}-{sequence:02d}-{symbol}-{side}",
         rebalance_date=rebalance_date,
         sequence=sequence,
         intent=intent,

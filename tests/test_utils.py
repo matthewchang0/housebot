@@ -1,12 +1,18 @@
 from datetime import date
 
-from house.utils import linear_decay, parse_amount_midpoint, redistribute_with_cap
+from house.utils import linear_decay, normalize_symbol, parse_amount_midpoint, redistribute_with_cap
 
 
 def test_amount_midpoints_match_strategy_table() -> None:
     assert parse_amount_midpoint("$1,001 - $15,000") == 8_000.0
     assert parse_amount_midpoint("$500,001 - $1,000,000") == 750_000.0
     assert parse_amount_midpoint("Over $50,000,000") == 50_000_000.0
+
+
+def test_normalize_symbol_maps_known_aliases_and_market_suffixes() -> None:
+    assert normalize_symbol("BRCM") == "AVGO"
+    assert normalize_symbol("SQ") == "XYZ"
+    assert normalize_symbol("BRK/B:US") == "BRK.B"
 
 
 

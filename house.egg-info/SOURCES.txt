@@ -20,5 +20,7 @@ house.egg-info/dependency_links.txt
 house.egg-info/entry_points.txt
 house.egg-info/requires.txt
 house.egg-info/top_level.txt
+tests/test_cli.py
+tests/test_config.py
 tests/test_portfolio.py
 tests/test_utils.py
