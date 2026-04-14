@@ -1,0 +1,2 @@
+[console_scripts]
+house = house.cli:main
