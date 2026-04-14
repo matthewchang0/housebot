@@ -9,6 +9,8 @@ def test_amount_midpoints_match_strategy_table() -> None:
     assert parse_amount_midpoint("Over $50,000,000") == 50_000_000.0
 
 
+
+
 def test_linear_decay_hits_zero_at_window_end() -> None:
     assert linear_decay(date(2026, 1, 1), date(2026, 4, 1), 90) == 0.0
     assert round(linear_decay(date(2026, 3, 1), date(2026, 4, 1), 90), 3) == 0.656
