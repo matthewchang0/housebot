@@ -20,6 +20,10 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -e .
 
+# Pre-create writable runtime directories for the systemd service user.
+mkdir -p data logs reports
+find data logs reports -type d -exec chmod 755 {} \;
+
 install -m 0644 deploy/house.service /tmp/house.service
 python3 - "${APP_DIR}" /tmp/house.service <<'PY'
 from pathlib import Path
@@ -45,6 +49,10 @@ sudo mv /tmp/house-dashboard.service /etc/systemd/system/house-dashboard.service
 sudo systemctl daemon-reload
 sudo systemctl enable house.service
 sudo systemctl enable house-dashboard.service
+
+# The services run as the dedicated `house` user and need write access to the
+# app directory for the SQLite database, logs, and generated reports.
+sudo chown -R house:house "${APP_DIR}"
 
 echo "Server files installed."
 echo "Next:"

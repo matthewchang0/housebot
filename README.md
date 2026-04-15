@@ -84,12 +84,13 @@ If you want the dashboard to show the same data as the bot, run both services on
 Recommended flow:
 
 ```bash
-sudo dnf install -y python3.13 python3.13-pip rsync nginx git
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip rsync nginx git curl openssl
 git clone <repo-url> /opt/house
 cd /opt/house
 cp .env.example .env
 printf '\nDASHBOARD_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> .env
-bash deploy/install-server.sh
+PYTHON_BIN=python3 bash deploy/install-server.sh
 sudo systemctl start house.service
 sudo systemctl start house-dashboard.service
 sudo systemctl status house.service
@@ -118,7 +119,7 @@ sudo journalctl -u house-dashboard.service -f
 If the VM is behind Oracle Cloud networking, open inbound TCP ports `80` and `443` in both:
 
 - the Oracle Cloud security list or network security group
-- the VM firewall itself, for example `firewall-cmd --permanent --add-service=http`
+- the VM firewall itself, for example `sudo ufw allow 80` and `sudo ufw allow 443`
 
 For HTTPS, point a domain at the VM and add Certbot or your preferred TLS terminator in front of nginx.
 
