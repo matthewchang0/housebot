@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -634,15 +636,37 @@ class DashboardApp:
         return self.bot.dashboard_data()
 
 
+def _dashboard_bearer_token() -> str:
+    return os.getenv("DASHBOARD_BEARER_TOKEN", "").strip()
+
+
+def _is_authorized(auth_header: str | None) -> bool:
+    expected = _dashboard_bearer_token()
+    if not expected:
+        return True
+    if not auth_header:
+        return False
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    return hmac.compare_digest(token, expected)
+
+
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server: "DashboardHTTPServer"
 
     def do_GET(self) -> None:
+        if not _is_authorized(self.headers.get("Authorization")):
+            self._write_unauthorized()
+            return
         if self.path in {"/", "/index.html"}:
             self._write_html(DASHBOARD_HTML)
             return
         if self.path == "/api/dashboard":
             self._write_json(self.server.app.dashboard_payload())
+            return
+        if self.path == "/api/health":
+            self._write_json({"ok": True})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -662,6 +686,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _write_unauthorized(self) -> None:
+        encoded = json.dumps({"error": "Unauthorized"}).encode("utf-8")
+        self.send_response(HTTPStatus.UNAUTHORIZED)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("WWW-Authenticate", "Bearer")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)

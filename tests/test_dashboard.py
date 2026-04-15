@@ -6,7 +6,7 @@ from pathlib import Path
 from house.bot import HouseBot
 from house.config import Settings
 from house.db import Database
-from house.dashboard import DashboardApp
+from house.dashboard import DashboardApp, _is_authorized
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -136,3 +136,13 @@ def test_dashboard_payload_collects_local_state(tmp_path, monkeypatch) -> None:
     assert payload["latest_positions"][0]["symbol"] == "AAPL"
     assert payload["recent_logs"][0]["event"] == "FILINGS_INGESTED"
     assert payload["latest_rebalance_report"]["rebalance_date"] == "2026-04-14"
+
+
+def test_dashboard_authorization_token(monkeypatch) -> None:
+    monkeypatch.delenv("DASHBOARD_BEARER_TOKEN", raising=False)
+    assert _is_authorized(None)
+
+    monkeypatch.setenv("DASHBOARD_BEARER_TOKEN", "secret-token")
+    assert not _is_authorized(None)
+    assert not _is_authorized("Bearer wrong-token")
+    assert _is_authorized("Bearer secret-token")

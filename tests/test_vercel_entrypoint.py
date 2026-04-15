@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import app as vercel_app
 from house.bot import HouseBot
@@ -106,3 +107,26 @@ def test_vercel_entrypoint_serves_dashboard_routes(tmp_path, monkeypatch) -> Non
         assert payload["status"]["runtime_state"]["last_ingest_date"] == "2026-04-14"
     finally:
         bot.close()
+
+
+def test_vercel_entrypoint_proxies_to_upstream(monkeypatch) -> None:
+    monkeypatch.setenv("DASHBOARD_UPSTREAM_URL", "https://house.example.com")
+    monkeypatch.setenv("DASHBOARD_UPSTREAM_TOKEN", "shared-secret")
+
+    def fake_get(url: str, **kwargs: object) -> SimpleNamespace:
+        assert url == "https://house.example.com/api/dashboard"
+        assert kwargs["headers"] == {"Authorization": "Bearer shared-secret"}
+        return SimpleNamespace(
+            status_code=200,
+            reason_phrase="OK",
+            content=json.dumps({"status": {"mode": "PAPER"}}).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+
+    monkeypatch.setattr(vercel_app.httpx, "get", fake_get)
+
+    status, headers, body = _call_app("/api/dashboard")
+
+    assert status == "200 OK"
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert json.loads(body)["status"]["mode"] == "PAPER"

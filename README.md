@@ -76,3 +76,77 @@ sudo systemctl enable --now house-dashboard.service
 ```
 
 The scheduler service runs `house run`. The dashboard service exposes the read-only UI on port `8765`.
+
+### Oracle VM / Same-Machine Dashboard
+
+If you want the dashboard to show the same data as the bot, run both services on the same VM so they share the same SQLite database, logs, and reports on disk.
+
+Recommended flow:
+
+```bash
+sudo dnf install -y python3.13 python3.13-pip rsync nginx git
+git clone <repo-url> /opt/house
+cd /opt/house
+cp .env.example .env
+printf '\nDASHBOARD_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> .env
+bash deploy/install-server.sh
+sudo systemctl start house.service
+sudo systemctl start house-dashboard.service
+sudo systemctl status house.service
+sudo systemctl status house-dashboard.service
+```
+
+Expose the dashboard through nginx:
+
+```bash
+sudo cp deploy/nginx-house-dashboard.conf /etc/nginx/conf.d/house-dashboard.conf
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+Useful checks:
+
+```bash
+source .env
+curl -H "Authorization: Bearer $DASHBOARD_BEARER_TOKEN" http://127.0.0.1:8765/api/health
+curl -H "Authorization: Bearer $DASHBOARD_BEARER_TOKEN" http://127.0.0.1:8765/api/dashboard
+sudo journalctl -u house.service -f
+sudo journalctl -u house-dashboard.service -f
+```
+
+If the VM is behind Oracle Cloud networking, open inbound TCP ports `80` and `443` in both:
+
+- the Oracle Cloud security list or network security group
+- the VM firewall itself, for example `firewall-cmd --permanent --add-service=http`
+
+For HTTPS, point a domain at the VM and add Certbot or your preferred TLS terminator in front of nginx.
+
+### Vercel Frontend + Oracle VM Backend
+
+If you want to keep the Vercel URL for the frontend, deploy the bot and dashboard on the Oracle VM, then make Vercel proxy dashboard API requests to the VM.
+
+1. Bring up the backend on the Oracle VM and verify it locally:
+
+```bash
+source .env
+curl -H "Authorization: Bearer $DASHBOARD_BEARER_TOKEN" http://127.0.0.1:8765/api/health
+curl -H "Authorization: Bearer $DASHBOARD_BEARER_TOKEN" http://127.0.0.1:8765/api/dashboard
+```
+
+2. Put nginx in front of the VM dashboard and give it a public HTTPS URL, for example `https://house-api.example.com`.
+
+3. In Vercel, set these environment variables:
+
+```bash
+DASHBOARD_UPSTREAM_URL=https://house-api.example.com
+DASHBOARD_UPSTREAM_TOKEN=<same value as DASHBOARD_BEARER_TOKEN on the VM>
+```
+
+4. Redeploy the Vercel app.
+
+After that:
+
+- Vercel serves the UI at `/`
+- Vercel proxies `/api/dashboard` to `https://house-api.example.com/api/dashboard`
+- the Oracle VM remains the source of truth for the SQLite database and logs
