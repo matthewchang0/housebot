@@ -1,0 +1,26 @@
+services:
+  bot:
+    build: .
+    command: ["house", "run"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+
+  dashboard:
+    build: .
+    command: ["house", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./reports:/app/reports
+    ports:
+      - "8765:8765"
+    depends_on:
+      - bot

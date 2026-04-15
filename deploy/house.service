@@ -1,0 +1,17 @@
+[Unit]
+Description=House trading bot scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/house
+EnvironmentFile=/opt/house/.env
+ExecStart=/opt/house/.venv/bin/house run
+Restart=always
+RestartSec=10
+User=house
+Group=house
+
+[Install]
+WantedBy=multi-user.target
