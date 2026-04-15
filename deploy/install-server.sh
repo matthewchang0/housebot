@@ -50,9 +50,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable house.service
 sudo systemctl enable house-dashboard.service
 
-# The services run as the dedicated `house` user and need write access to the
-# app directory for the SQLite database, logs, and generated reports.
-sudo chown -R house:house "${APP_DIR}"
+# Keep the git checkout owned by the deploy user so `git pull` works normally,
+# but hand runtime storage to the systemd service user.
+sudo chown -R house:house "${APP_DIR}/data" "${APP_DIR}/logs" "${APP_DIR}/reports"
 
 echo "Server files installed."
 echo "Next:"
