@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +68,19 @@ def _load_local_env() -> None:
         os.environ.setdefault(key, value)
 
 
+def _default_storage_root() -> Path:
+    if os.getenv("VERCEL"):
+        return Path(tempfile.gettempdir()) / "house"
+    return Path(".")
+
+
+def _default_path(env_name: str, fallback: Path) -> Path:
+    raw = os.getenv(env_name)
+    if raw is not None and raw != "":
+        return Path(raw)
+    return fallback
+
+
 @dataclass(frozen=True)
 class Settings:
     backend_id: str
@@ -102,6 +116,7 @@ class Settings:
         _load_local_env()
         backend_id = _normalize_backend_id(os.getenv("BACKEND_ID", "house"))
         mode = os.getenv("MODE", "PAPER").strip().upper() or "PAPER"
+        storage_root = _default_storage_root()
         default_trade_url = (
             "https://api.alpaca.markets"
             if mode == "LIVE"
@@ -127,8 +142,8 @@ class Settings:
             max_position_pct=_env_float("MAX_POSITION_PCT", 0.15),
             max_drawdown_soft=_env_float("MAX_DRAWDOWN_SOFT", 0.15),
             max_drawdown_hard=_env_float("MAX_DRAWDOWN_HARD", 0.25),
-            log_path=Path(os.getenv("LOG_PATH", f"./logs/{backend_id}.jsonl")),
-            db_path=Path(os.getenv("DB_PATH", f"./data/{backend_id}/filings.db")),
+            log_path=_default_path("LOG_PATH", storage_root / "logs" / f"{backend_id}.jsonl"),
+            db_path=_default_path("DB_PATH", storage_root / "data" / backend_id / "filings.db"),
             poll_interval_market=_env_int("POLL_INTERVAL_MARKET", 900),
             poll_interval_off=_env_int("POLL_INTERVAL_OFF", 3600),
             max_long_positions=_env_int("MAX_LONG_POSITIONS", 50),
@@ -136,7 +151,7 @@ class Settings:
             min_position_size=_env_float("MIN_POSITION_SIZE", 500.0),
             user_agent=os.getenv("USER_AGENT", "NancyBot/0.1"),
             poor_accuracy_members=_env_csv("POOR_ACCURACY_MEMBERS"),
-            report_path=Path(os.getenv("REPORT_PATH", f"./reports/{backend_id}")),
+            report_path=_default_path("REPORT_PATH", storage_root / "reports" / backend_id),
         )
         settings.log_path.parent.mkdir(parents=True, exist_ok=True)
         settings.db_path.parent.mkdir(parents=True, exist_ok=True)

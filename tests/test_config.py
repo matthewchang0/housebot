@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from house.config import Settings
@@ -63,3 +64,19 @@ def test_settings_load_uses_backend_scoped_defaults(tmp_path, monkeypatch) -> No
     assert settings.db_path == Path("./data/house-bot/filings.db")
     assert settings.log_path == Path("./logs/house-bot.jsonl")
     assert settings.report_path == Path("./reports/house-bot")
+
+
+def test_settings_load_uses_tmp_storage_on_vercel(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("BACKEND_ID", "house-bot")
+    monkeypatch.delenv("DB_PATH", raising=False)
+    monkeypatch.delenv("LOG_PATH", raising=False)
+    monkeypatch.delenv("REPORT_PATH", raising=False)
+
+    settings = Settings.load()
+
+    expected_root = Path(tempfile.gettempdir()) / "house"
+    assert settings.db_path == expected_root / "data" / "house-bot" / "filings.db"
+    assert settings.log_path == expected_root / "logs" / "house-bot.jsonl"
+    assert settings.report_path == expected_root / "reports" / "house-bot"
